@@ -1,4 +1,4 @@
-"""Render engine (no Qt): audio analysis, LED bar, spinning reels, scene view."""
+"""Render engine v2: every scene is a finished photo; we animate its reels, write the song name on the tape label and drive its visualizer."""
 import json, math, os, subprocess
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
@@ -9,17 +9,8 @@ FPS = 30
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LANCZOS = Image.Resampling.LANCZOS
 
-DEFAULTS = dict(
-    scene="golden_floor", cassette="",
-    top_on=False, line1="SONY", line2="CASSETTE PLAYER  WM-EX610", line3="TYPE I (NORMAL) POSITION  \u2022  STEREO CASSETTE PLAYER",
-    label_on=True, label="Song name",
-    font_top="", font_hand="",
-    col_text="#2a2420", col_ink="#1f2a44", col_led="#ffb85c",
-    led_style="bars", spin=True, spin_speed=120.0,
-    quality=720, start=0.0, dur=60.0,
-    zoom=2.7, cx=0.33, cy=0.5, pan=True, cx_end=0.745,
-)
-LED_STYLES = ["bars", "segments"]
+DEFAULTS = dict(scene="golden_frame", quality=720, start=0.0, dur=60.0,
+                label="Song name", font_hand="", spin=True, spin_speed=120.0)
 
 
 def rgb(h):
@@ -104,74 +95,6 @@ def demo_analysis():
     return A
 
 
-# ---------------------------------------------------------------- inpaint (پاک‌کردن نواحی با پر کردن از اطراف)
-def _blur_ch(a, r):
-    return np.asarray(Image.fromarray(a.clip(0, 255).astype("u1")).filter(ImageFilter.GaussianBlur(r)), float)
-
-
-def inpaint(img, polys, grow=11):
-    W, H = img.size
-    m = Image.new("L", (W, H), 0)
-    d = ImageDraw.Draw(m)
-    for p in polys:
-        d.polygon([tuple(q) for q in p], fill=255)
-    bb = m.getbbox()
-    if not bb:
-        return img
-    pad = 80
-    box = (max(0, bb[0] - pad), max(0, bb[1] - pad), min(W, bb[2] + pad), min(H, bb[3] + pad))
-    reg = img.crop(box)
-    mm = m.crop(box).filter(ImageFilter.MaxFilter(grow))
-    a = np.asarray(reg, float)
-    known = 1 - np.asarray(mm, float) / 255
-    fill = np.zeros_like(a)
-    done = np.zeros(known.shape, bool)
-    for r in (3, 8, 20, 50, 120):
-        den = _blur_ch(known * 255, r) / 255
-        ok = (den > .3) & (~done)
-        if r == 120:
-            ok = ~done
-        for c in range(3):
-            num = _blur_ch(a[..., c] * known, r)
-            fill[..., c][ok] = num[ok] / np.maximum(den[ok], 1e-3)
-        done |= ok
-    fm = np.asarray(mm.filter(ImageFilter.GaussianBlur(2.2)), float)[..., None] / 255
-    noise = np.random.default_rng(1).normal(0, 2.2, a.shape[:2])[..., None]
-    out = a * (1 - fm) + (fill + noise) * fm
-    img = img.copy()
-    img.paste(Image.fromarray(out.clip(0, 255).astype("u1")), box[:2])
-    return img
-
-
-def fill_label(img, box, paper_x):
-    x0, y0, x1, y1 = box
-    a = np.asarray(img, float)
-    rows = np.median(a[y0:y1, paper_x[0]:paper_x[1]], axis=1)
-    out = np.repeat(rows[:, None, :], x1 - x0, axis=1)
-    out += np.random.default_rng(2).normal(0, 1.5, out.shape[:2])[..., None]
-    img = img.copy()
-    img.paste(Image.fromarray(out.clip(0, 255).astype("u1")), (x0, y0))
-    return img
-
-
-# ---------------------------------------------------------------- صحنه
-class Static:
-    pass
-
-
-def fill_lr(img, box, lx, rx):
-    x0, y0, x1, y1 = box
-    a = np.asarray(img, float)
-    cl = np.median(a[y0:y1, lx[0]:lx[1]], axis=1)
-    cr = np.median(a[y0:y1, rx[0]:rx[1]], axis=1)
-    t = np.linspace(0, 1, x1 - x0)[None, :, None]
-    out = cl[:, None, :] * (1 - t) + cr[:, None, :] * t
-    out += np.random.default_rng(3).normal(0, 1.6, out.shape[:2])[..., None]
-    m = Image.new("L", (x1 - x0, y1 - y0), 0)
-    ImageDraw.Draw(m).rectangle([5, 5, x1 - x0 - 6, y1 - y0 - 6], fill=255)
-    img = img.copy()
-    img.paste(Image.fromarray(out.clip(0, 255).astype("u1")), (x0, y0), m.filter(ImageFilter.GaussianBlur(3.5)))
-    return img
 
 
 def fill_face(img, led, f, ss=1):
@@ -205,6 +128,51 @@ def min_patch(img, poly, size=15, blur=5, feather=7, ss=1):
     return img
 
 
+
+
+
+# ---------------------------------------------------------------- پاک‌کردن / پر کردن
+def fill_label(img, box, paper_x):
+    """Fill the whole label box with the paper colour (row-wise median of the clean paper columns)."""
+    x0, y0, x1, y1 = [int(v) for v in box]
+    a = np.asarray(img, float)
+    rngs = paper_x if isinstance(paper_x[0], (list, tuple)) else [paper_x]
+    cols = np.concatenate([a[y0:y1, int(r[0]):int(r[1])] for r in rngs], axis=1)
+    rows = np.median(cols, axis=1)
+    out = np.repeat(rows[:, None, :], x1 - x0, axis=1)
+    out += np.random.default_rng(2).normal(0, 1.4, out.shape[:2])[..., None]
+    m = Image.new("L", (x1 - x0, y1 - y0), 0)
+    ImageDraw.Draw(m).rectangle([1, 1, x1 - x0 - 2, y1 - y0 - 2], fill=255)
+    img = img.copy()
+    img.paste(Image.fromarray(out.clip(0, 255).astype("u1")), (x0, y0), m.filter(ImageFilter.GaussianBlur(1.2)))
+    return img
+
+
+def fill_rows_pct(img, rect, pct=25):
+    """Remove baked bars from a dark display: every row gets the low-percentile colour of that row."""
+    x0, y0, x1, y1 = [int(v) for v in rect]
+    a = np.asarray(img, float)
+    reg = a[y0:y1, x0:x1]
+    rows = np.percentile(reg, pct, axis=1)
+    k = np.ones(5) / 5
+    rows = np.stack([np.convolve(np.pad(rows[:, c], 2, mode="edge"), k, "valid") for c in range(3)], 1)
+    out = np.repeat(rows[:, None, :], x1 - x0, axis=1)
+    out += np.random.default_rng(5).normal(0, 1.2, out.shape[:2])[..., None]
+    m = Image.new("L", (x1 - x0, y1 - y0), 0)
+    ImageDraw.Draw(m).rectangle([3, 3, x1 - x0 - 4, y1 - y0 - 4], fill=255)
+    img = img.copy()
+    img.paste(Image.fromarray(out.clip(0, 255).astype("u1")), (x0, y0), m.filter(ImageFilter.GaussianBlur(2.5)))
+    return img
+
+
+def persp(dst, src):
+    A, b = [], []
+    for (x, y), (u, v) in zip(dst, src):
+        A.append([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.append(u)
+        A.append([0, 0, 0, x, y, 1, -v * x, -v * y]); b.append(v)
+    return tuple(np.linalg.solve(np.array(A, float), np.array(b, float)))
+
+
 def fit_text(text_fn, text, fam, px, color, max_w, bold=False):
     while True:
         t = text_fn(text, fam, max(5, int(px)), color, bold)
@@ -213,100 +181,260 @@ def fit_text(text_fn, text, fam, px, color, max_w, bold=False):
         px *= .94
 
 
-SKIP = {"count", "c_top", "c_bot", "name", "image", "ss", "view"}
+# ---------------------------------------------------------------- نمایشگر (پنل شیشه‌ای دستگاه)
+GLOW_LUT = [min(255, int(v * 2.0)) for v in range(256)]
+GLOW_MIX = [int(v * .5) for v in range(256)]
 
 
-def scale_cfg(o, ss):
-    if isinstance(o, dict):
-        return {k: (v if k in SKIP else scale_cfg(v, ss)) for k, v in o.items()}
-    if isinstance(o, list):
-        return [scale_cfg(v, ss) for v in o]
-    if isinstance(o, bool):
-        return o
-    if isinstance(o, (int, float)):
-        return o * ss
-    return o
+def gradient(w, h, bottom, top):
+    t = np.linspace(1, 0, h)[:, None, None]
+    c = np.array(bottom, float) * (1 - t) + np.array(top, float) * t
+    return Image.fromarray(np.broadcast_to(c, (h, w, 3)).clip(0, 255).astype("u1"), "RGB")
 
 
-_CACHE = {}
+class Panel:
+    """Animated visualizer drawn flat, then warped into the display glass of the photo and added as light."""
+
+    def __init__(self, cfg):
+        self.c = cfg
+        q = cfg["quad"]
+        xs, ys = [p[0] for p in q], [p[1] for p in q]
+        self.x0, self.y0 = int(min(xs)), int(min(ys))
+        self.bw = int(math.ceil(max(xs))) - self.x0
+        self.bh = int(math.ceil(max(ys))) - self.y0
+        wq = (math.dist(q[0], q[1]) + math.dist(q[3], q[2])) / 2
+        hq = (math.dist(q[0], q[3]) + math.dist(q[1], q[2])) / 2
+        self.cw, self.ch = int(wq * 2), int(hq * 2)
+        dst = [(p[0] - self.x0, p[1] - self.y0) for p in q]
+        self.coef = persp(dst, [(0, 0), (self.cw, 0), (self.cw, self.ch), (0, self.ch)])
+        cols = cfg.get("colors", ["#ffb04a"])
+        self.grad = gradient(self.cw, self.ch, rgb(cols[0]), rgb(cols[-1]))
+        self.n = cfg.get("count", 40)
+        self.style = cfg.get("style", "segments")
+        self.gain = cfg.get("gain", 1.0)
+        # عمل پنل داخل شیشه: حاشیه‌ی کوچک
+        self.mx, self.top, self.bot = .035 * self.cw, .12 * self.ch, .90 * self.ch
+
+    def _bands(self, A, i):
+        b = A.B[i]
+        idx = np.linspace(0, NB - 1, self.n)
+        return np.interp(idx, np.arange(NB), b), np.interp(idx, np.arange(NB), A.peak[i])
+
+    def draw(self, d, A, i):
+        b, pk = self._bands(A, i)
+        cw, ch, n = self.cw, self.ch, self.n
+        step = (cw - 2 * self.mx) / n
+        H = self.bot - self.top
+        if self.style == "segments":
+            seg = 14
+            sh = H / seg
+            for k in range(n):
+                x = self.mx + k * step
+                lit = int(b[k] * seg + .5)
+                for s in range(lit):
+                    y = self.bot - s * sh
+                    d.rectangle([x + step * .16, y - sh * .78, x + step * .84, y], fill=int(200 + 55 * s / seg))
+                pp = min(seg - 1, int(pk[k] * seg + .5))
+                if pp > lit:
+                    y = self.bot - pp * sh
+                    d.rectangle([x + step * .16, y - sh * .78, x + step * .84, y], fill=255)
+        elif self.style == "bars":
+            for k in range(n):
+                x = self.mx + k * step
+                h = (.04 + .96 * b[k]) * H
+                d.rectangle([x + step * .3, self.bot - h, x + step * .7, self.bot], fill=235)
+        elif self.style == "mirror":
+            mid = (self.top + self.bot) / 2
+            for k in range(n):
+                x = self.mx + k * step
+                h = (.03 + .97 * b[k]) * H / 2
+                d.rounded_rectangle([x + step * .28, mid - h, x + step * .72, mid + h], radius=step * .2, fill=235)
+        else:  # line
+            xs = np.linspace(self.mx, cw - self.mx, 160)
+            v = np.interp(np.linspace(0, NB - 1, 160), np.arange(NB), A.B[i])
+            v = np.convolve(v, np.ones(7) / 7, "same")
+            ys = self.bot - (.04 + .96 * v) * H
+            pts = list(zip(xs, ys))
+            d.polygon(pts + [(xs[-1], self.bot), (xs[0], self.bot)], fill=70)
+            d.line(pts, fill=255, width=max(2, int(ch * .018)))
+
+    def paint(self, img, A, i):
+        i = min(i, A.n - 1)
+        m = Image.new("L", (self.cw, self.ch), 0)
+        self.draw(ImageDraw.Draw(m), A, i)
+        g = m.filter(ImageFilter.GaussianBlur(self.ch * .03)).point(GLOW_LUT).point(GLOW_MIX)
+        m = ImageChops.lighter(m, g)
+        if self.gain != 1.0:
+            m = m.point(lambda v: min(255, int(v * self.gain)))
+        col = Image.composite(self.grad, Image.new("RGB", m.size, (0, 0, 0)), m)
+        w = col.transform((self.bw, self.bh), Image.Transform.PERSPECTIVE, self.coef, Image.Resampling.BICUBIC)
+        box = (self.x0, self.y0, self.x0 + self.bw, self.y0 + self.bh)
+        img.paste(ImageChops.add(img.crop(box), w), box[:2])
 
 
-def compose_scene(scene, scene_dir, S, text_fn, fam_top, fam_hand, cas_dir=None):
-    ss = scene.get("ss", 2)
-    cfg = scale_cfg(scene, ss)
-    key = (os.path.abspath(scene_dir), cfg["image"], ss)
-    led = cfg.get("led")
-    if key not in _CACHE:
-        img = Image.open(os.path.join(scene_dir, cfg["image"])).convert("RGB")
-        if ss != 1:
-            img = img.resize((img.width * ss, img.height * ss), LANCZOS)
-        if led:
-            if led.get("face"):
-                img = fill_face(img, led, led["face"], ss)
-            if led.get("refl_clean"):
-                img = min_patch(img, led["refl_clean"], ss=ss)
-        _CACHE.clear()
-        _CACHE[key] = img
-    img = _CACHE[key].copy()
+# ---------------------------------------------------------------- استوانه‌ی سفید روی سطح
+class Cylinder:
+    """A realistic white cylindrical LED bar lying on the surface, with contact shadow, reflection and light spill."""
+
+    def __init__(self, cfg):
+        self.c = cfg
+        self.L, self.R = int(cfg["length"]), int(cfg["radius"])
+        self.cx, self.cy = cfg["center"]
+        self.light = np.array(cfg.get("light", [1, .93, .82]), float)
+        self.amb = cfg.get("amb", 1.0)
+        self.col = rgb(cfg.get("color", "#ffb04a"))
+        self.n = cfg.get("count", 36)
+        self.build()
+
+    def build(self):
+        L, R = self.L, self.R
+        H = int(R * 1.9)
+        cap = int(R * .42)
+        t = np.linspace(0, 1, H)[:, None]
+        prof = np.interp(t, [0, .10, .30, .55, .80, 1.0], [.62, 1.0, .96, .80, .58, .40])
+        base = np.broadcast_to(prof, (H, L))[..., None] * 255 * self.light * self.amb
+        # شیب افقی ملایم و تیره‌شدن دو سر
+        xg = np.linspace(0, 1, L)[None, :, None]
+        base = base * (0.92 + .08 * np.sin(np.pi * xg))
+        mask = Image.new("L", (L, H), 0)
+        d = ImageDraw.Draw(mask)
+        d.rectangle([cap, 0, L - cap, H - 1], fill=255)
+        d.ellipse([0, 0, cap * 2, H - 1], fill=255)
+        d.ellipse([L - cap * 2, 0, L - 1, H - 1], fill=255)
+        body = Image.fromarray(base.clip(0, 255).astype("u1"), "RGB")
+        # سرپوش‌ها
+        bd = ImageDraw.Draw(body)
+        bd.ellipse([L - cap * 2 + 1, 2, L - 3, H - 3], fill=tuple(int(v) for v in (214, 210, 202) * np.array(self.light) * self.amb), outline=(150, 146, 140))
+        bd.ellipse([L - cap * 2 + 5, int(H * .22), L - 9, int(H * .78)], fill=tuple(int(v) for v in (186, 182, 174) * np.array(self.light) * self.amb))
+        bd.ellipse([0, 0, cap * 2, H - 1], outline=(110, 106, 100))
+        # شیار نمایشگر
+        self.sx0, self.sx1 = int(L * .09), int(L * .90)
+        self.sy0, self.sy1 = int(H * .40), int(H * .74)
+        sl = Image.new("L", (L, H), 0)
+        ImageDraw.Draw(sl).rounded_rectangle([self.sx0, self.sy0, self.sx1, self.sy1], radius=int(R * .16), fill=255)
+        self.slit = sl.filter(ImageFilter.GaussianBlur(.8))
+        body.paste((22, 19, 17), (0, 0), self.slit)
+        self.body = body
+        self.mask = mask.filter(ImageFilter.GaussianBlur(.9))
+        self.H = H
+
+    def paint(self, img, A, i):
+        i = min(i, A.n - 1)
+        L, H, R = self.L, self.H, self.R
+        b, pk = A.B[i], A.peak[i]
+        bars = Image.new("RGB", (L, H)); d = ImageDraw.Draw(bars)
+        n = self.n
+        sw = (self.sx1 - self.sx0 - 8) / n
+        hmax = (self.sy1 - self.sy0) - 6
+        for k in range(n):
+            u = k / (n - 1)
+            v = np.interp(u * (NB - 1), np.arange(NB), b)
+            p = np.interp(u * (NB - 1), np.arange(NB), pk)
+            x = self.sx0 + 4 + k * sw
+            hh = max(2, (.06 + .94 * v) * hmax)
+            d.rectangle([x + sw * .18, self.sy1 - 3 - hh, x + sw * .82, self.sy1 - 3], fill=self.col)
+            yp = self.sy1 - 3 - max(2, (.06 + .94 * p) * hmax) - 2
+            d.rectangle([x + sw * .18, yp - 1.5, x + sw * .82, yp], fill=tuple(min(255, int(c + (255 - c) * .5)) for c in self.col))
+        glow = bars.filter(ImageFilter.GaussianBlur(R * .12)).point(lambda v: int(v * .7))
+        light = ImageChops.add(bars, glow)
+        light = Image.composite(light, Image.new("RGB", light.size), self.slit.point(lambda v: min(255, int(v * 1.0))))
+        # توهم نور روی بدنه: درخشش کم بالای شیار
+        spr = ImageChops.add(self.body, light)
+        x0 = int(self.cx - L / 2); y0 = int(self.cy - H / 2)
+        yb = y0 + H
+        # سایه‌ی تماس
+        sh = Image.new("L", img.size, 0)
+        ImageDraw.Draw(sh).ellipse([x0 - 6, yb - R * .30, x0 + L + 6, yb + R * .38], fill=170)
+        sh = sh.filter(ImageFilter.GaussianBlur(R * .30))
+        img.paste((10, 7, 5), (0, 0), sh)
+        # بازتاب
+        rh = int(H * .8)
+        refl = ImageChops.add(self.body, light).transpose(Image.Transpose.FLIP_TOP_BOTTOM).crop((0, 0, L, rh))
+        fade = np.linspace(.42, 0, rh)[:, None]
+        am = (np.asarray(self.mask.transpose(Image.Transpose.FLIP_TOP_BOTTOM).crop((0, 0, L, rh)), float) * fade).astype("u1")
+        refl = refl.filter(ImageFilter.GaussianBlur(1.6))
+        img.paste(refl, (x0, yb + 2), Image.fromarray(am, "L").filter(ImageFilter.GaussianBlur(1.4)))
+        # نور ریخته‌شده روی سطح
+        spill = Image.new("RGB", (L + 120, int(R * 2.4)), (0, 0, 0))
+        sd = ImageDraw.Draw(spill)
+        e = float(np.mean(b[:20]) * .6 + .25)
+        sd.ellipse([40, 0, L + 80, int(R * 2.2)], fill=tuple(int(c * .30 * e) for c in self.col))
+        spill = spill.filter(ImageFilter.GaussianBlur(R * .7))
+        reg = img.crop((x0 - 60, yb - 2, x0 - 60 + spill.width, yb - 2 + spill.height))
+        img.paste(ImageChops.add(reg, spill), (x0 - 60, yb - 2))
+        img.paste(spr, (x0, y0), self.mask)
+
+
+# ---------------------------------------------------------------- صحنه
+class Static:
+    pass
+
+
+def compose_scene(scene, scene_dir, S, text_fn, fam_hand):
+    img = Image.open(os.path.join(scene_dir, scene["image"])).convert("RGB")
     st = Static()
-    st.cfg = cfg
-    tt = cfg.get("top_text")
-    if tt and S["top_on"]:
-        img = fill_lr(img, tt["box"], tt["left"], tt["right"])
-        for line, spec in zip((S["line1"], S["line2"], S["line3"]), tt["lines"]):
-            if line.strip():
-                t = fit_text(text_fn, line, fam_top, spec["px"], S["col_text"], tt["max_x"] - spec["x"], spec.get("bold", False))
-                t = t.filter(ImageFilter.GaussianBlur(.55 * ss))
-                img.paste(t, (int(spec["x"] - 6), int(spec["y"] - 4)), t)
-    # کاست: اصلی عکس یا یکی از مدل‌های پوشه‌ی cassettes
-    reels, label = cfg.get("reels"), cfg.get("label")
-    cc = cfg.get("cassette")
-    cname = S.get("cassette", "")
-    if cc and cname and cas_dir and os.path.exists(os.path.join(cas_dir, cname + ".json")):
-        meta = json.load(open(os.path.join(cas_dir, cname + ".json"), encoding="utf-8"))
-        cimg = Image.open(os.path.join(cas_dir, meta["image"])).convert("RGBA")
-        x0, y0, x1, y1 = [int(v) for v in cc["clear"]]
-        img = fill_lr(img, (x0, y0, x1, y1), [int(v) for v in cc["left"]], [int(v) for v in cc["right"]])
-        cw = int(cc["width"]); ch = int(cimg.height * cw / cimg.width)
-        cas = cimg.resize((cw, ch), LANCZOS)
-        tint = meta.get("tint") or cc.get("tint")
-        if tint:
-            arr = np.asarray(cas, float)
-            arr[..., :3] *= np.array(tint)
-            cas = Image.fromarray(arr.clip(0, 255).astype("u1"), "RGBA")
-        px, py = int(cc["center"][0] - cw / 2), int(cc["center"][1] - ch / 2)
-        sh = cas.getchannel("A").filter(ImageFilter.GaussianBlur(3 * ss)).point(lambda v: int(v * .45))
-        img.paste((30, 22, 16), (px, py + 2 * ss), sh)
-        img.paste(cas, (px, py), cas)
-        reels = {"centers": [(px + h[0] * cw, py + h[1] * ch) for h in meta["hubs"]], "radius": meta["hub_r"] * cw * .97}
-        lx0, ly0, lx1, ly1 = meta["label"]
-        label = {"box": [int(px + lx0 * cw), int(py + ly0 * ch), int(px + lx1 * cw), int(py + ly1 * ch)],
-                 "paper_x": [int(px + meta["paper"][0] * cw), int(px + meta["paper"][1] * cw)], "k": .62}
-    if label and S["label_on"]:
-        img = fill_label(img, label["box"], label["paper_x"])
-        x0, y0, x1, y1 = label["box"]
-        if S["label"].strip():
-            t = fit_text(text_fn, S["label"], fam_hand, (y1 - y0) * label.get("k", 1.05), S["col_ink"], (x1 - x0) * .94)
-            t = t.filter(ImageFilter.GaussianBlur(.5 * ss))
-            img.paste(t, (int(x0 + (x1 - x0 - (t.width - 12)) / 2 - 6), int(y0 + (y1 - y0 - (t.height - 8)) / 2 - 4)), t)
+    st.cfg = scene
+    viz = scene.get("viz", {})
+    vt = viz.get("type")
+    # پاک‌کردن ویژوالایزر پخته‌شده در عکس
+    if vt == "led":
+        if viz.get("face"):
+            img = fill_face(img, viz, viz["face"], 1)
+        if viz.get("refl_clean"):
+            img = min_patch(img, viz["refl_clean"], ss=1)
+    if viz.get("clean"):
+        img = fill_rows_pct(img, viz["clean"], viz.get("clean_pct", 25))
+    # نام آهنگ روی برچسب نوار
+    lb = scene.get("label")
+    if lb and S["label"].strip():
+        img = fill_label(img, lb["box"], lb["paper_x"])
+        x0, y0, x1, y1 = lb["box"]
+        t = fit_text(text_fn, S["label"], fam_hand, (y1 - y0) * lb.get("k", 1.0), lb.get("ink", "#2a241e"), (x1 - x0) * .96)
+        t = t.filter(ImageFilter.GaussianBlur(lb.get("soft", .45)))
+        a = t.getchannel("A").point(lambda v: int(v * lb.get("opacity", .88)))
+        t.putalpha(a)
+        ang = lb.get("angle", 0)
+        if ang:
+            t = t.rotate(ang, resample=Image.Resampling.BICUBIC, expand=True)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        img.paste(t, (int(cx - t.width / 2), int(cy - t.height / 2)), t)
     st.base = img
     # ریل‌ها: تکه‌ی واقعی عکس می‌چرخد
     st.reels = []
-    if reels:
-        R = int(reels["radius"])
-        D = 2 * (R + 3 * ss)
+    rc = scene.get("reels")
+    if rc:
+        R = int(rc["radius"]); D = 2 * (R + 3)
         mask = Image.new("L", (D * 4, D * 4), 0)
         ImageDraw.Draw(mask).ellipse([(D * 4 - R * 8) / 2, (D * 4 - R * 8) / 2, (D * 4 + R * 8) / 2, (D * 4 + R * 8) / 2], fill=255)
-        mask = mask.resize((D, D), LANCZOS).filter(ImageFilter.GaussianBlur(.8 * ss))
-        for cx, cy in reels["centers"]:
+        mask = mask.resize((D, D), LANCZOS).filter(ImageFilter.GaussianBlur(.8))
+        for cx, cy in rc["centers"]:
             bx, by = int(cx) - D // 2, int(cy) - D // 2
             patch = img.crop((bx, by, bx + D, by + D))
-            rots = [patch.rotate(a, resample=Image.Resampling.BICUBIC) for a in range(0, 360, 3)]
-            st.reels.append((bx, by, rots, mask))
-    st.led = LED(led, S, img, ss) if led else None
-    st.bg_src = img
-    st.bg_cache = {}
+            st.reels.append((bx, by, [patch.rotate(a, resample=Image.Resampling.BICUBIC) for a in range(0, 360, 3)], mask))
+    st.viz = None
+    if vt == "led":
+        st.viz = LED(viz, {"led_style": viz.get("style", "bars"), "col_led": viz.get("color", "#ffb85c")}, img, 1)
+    elif vt == "panel":
+        st.viz = Panel(viz)
+    elif vt == "cylinder":
+        st.viz = Cylinder(viz)
     return st
+
+
+def render_frame(st, A, S, i, W, H, fps=FPS):
+    img = st.base.copy()
+    v = st.viz
+    if v is not None:
+        if isinstance(v, LED):
+            img.paste(v.region(A, i), (v.ox, v.oy))
+        else:
+            v.paint(img, A, i)
+    if S["spin"]:
+        idx = int(i / fps * S["spin_speed"] / 3) % 120
+        for x, y, rots, mask in st.reels:
+            img.paste(rots[idx], (x, y), mask)
+    return img.resize((W, H), LANCZOS)
+
 
 
 class LED:
@@ -361,48 +489,3 @@ class LED:
         return ImageChops.add(self.base, light)
 
 
-# ---------------------------------------------------------------- نمای نهایی (کراپ/زوم با پس‌زمینه‌ی محو)
-def view(img, W, H, S, st):
-    iw, ih = img.size
-    key = (W, H)
-    if key not in st.bg_cache:
-        k = max(W / iw, H / ih)
-        bg = st.bg_src.resize((math.ceil(iw * k), math.ceil(ih * k)), LANCZOS)
-        l, t = (bg.width - W) // 2, (bg.height - H) // 2
-        bg = bg.crop((l, t, l + W, t + H)).filter(ImageFilter.GaussianBlur(28 * W / 1080))
-        st.bg_cache[key] = bg.point(lambda v: int(v * .55))
-    out = st.bg_cache[key].copy()
-    z = max(1.0, S["zoom"])
-    vw = iw / z
-    vh = vw * H / W
-    ox = min(max(S["cx"] * iw - vw / 2, 0), max(0, iw - vw))
-    oy = S["cy"] * ih - vh / 2
-    sc = W / vw
-    ix0, iy0, ix1, iy1 = ox, max(0, oy), ox + vw, min(ih, oy + vh)
-    dx0, dy0 = 0, int(round((iy0 - oy) * sc))
-    dw, dh = W, max(2, int(round((iy1 - iy0) * sc)))
-    fg = img.resize((dw, dh), LANCZOS, box=(ix0, iy0, ix1, iy1))
-    m = np.ones((dh, dw), "f4")
-    ramp = max(2, int(26 * W / 1080))
-    if dy0 > 0:
-        m[:ramp] *= np.linspace(0, 1, ramp)[:, None]
-    if dy0 + dh < H:
-        m[-ramp:] *= np.linspace(1, 0, ramp)[:, None]
-    out.paste(fg, (dx0, dy0), Image.fromarray((m * 255).astype("u1"), "L"))
-    return out
-
-
-def render_frame(st, A, S, i, W, H, fps=FPS, prog=None):
-    if prog is None:
-        prog = i / max(1, A.n - 1)
-    if S.get("pan"):
-        e = prog * prog * (3 - 2 * prog)
-        S = dict(S, cx=S["cx"] + (S["cx_end"] - S["cx"]) * e)
-    img = st.base.copy()
-    if st.led:
-        img.paste(st.led.region(A, i), (st.led.ox, st.led.oy))
-    if S["spin"]:
-        idx = int(i / fps * S["spin_speed"] / 3) % 120
-        for x, y, rots, mask in st.reels:
-            img.paste(rots[idx], (x, y), mask)
-    return view(img, W, H, S, st)

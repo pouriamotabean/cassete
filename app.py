@@ -1,11 +1,12 @@
 import sys, os, json, shutil, subprocess
 from pathlib import Path
 from PIL import Image
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QRect, QUrl
-from PySide6.QtGui import QImage, QPixmap, QFont, QFontMetrics, QPainter, QColor, QFontDatabase, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QRect, QSize
+from PySide6.QtGui import QImage, QPixmap, QFont, QFontMetrics, QPainter, QColor, QFontDatabase, QIcon
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QFormLayout,
-                               QLabel, QPushButton, QLineEdit, QComboBox, QSlider, QDoubleSpinBox,
-                               QCheckBox, QTabWidget, QProgressBar, QFileDialog, QColorDialog, QMessageBox)
+                               QLabel, QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, QCheckBox,
+                               QProgressBar, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
+                               QToolButton, QSizePolicy, QListView)
 import core
 
 FROZEN = getattr(sys, "frozen", False)
@@ -15,7 +16,6 @@ SCENES = ASSETS / "scenes"
 SETTINGS = APP_DIR / "settings.json"
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
 QUALITY = {480: (480, 854), 720: (720, 1280), 1080: (1080, 1920)}
-LED_NAMES = {"bars": "Solid bars", "segments": "LED segments"}
 
 
 def find_ffmpeg():
@@ -42,8 +42,7 @@ def load_font(path):
 
 
 def text_fn(text, family, px, color, bold=False):
-    """Text is drawn with Qt so Persian shaping and right-to-left text render correctly.
-    Returned image has a 6px left / 4px top margin."""
+    """Text is drawn with Qt so Persian shaping and right-to-left text render correctly (6px left / 4px top margin)."""
     f = QFont(family) if family else QFont()
     f.setPixelSize(max(4, int(px)))
     f.setBold(bold)
@@ -111,6 +110,8 @@ class Main(QMainWindow):
         super().__init__()
         self.setWindowTitle("Cassette Reels")
         self.setAcceptDrops(True)
+        self.setMinimumSize(760, 520)
+        self.resize(1040, 700)
         self.S = dict(core.DEFAULTS)
         try:
             self.S.update(json.loads(SETTINGS.read_text(encoding="utf-8")))
@@ -120,169 +121,124 @@ class Main(QMainWindow):
         self.worker = None
         self.st = None
         self.dirty = True
+        self.frame_img = None
+        self.fi = 0
         self.demo = core.demo_analysis()
-        self.prog = 0.0
-        self.timer = QTimer(self, singleShot=True, interval=220)
-        self.timer.timeout.connect(self.refresh)
+        self.order = json.loads((SCENES / "order.json").read_text(encoding="utf-8"))
         self.build_ui()
-        self.refresh()
+        self.debounce = QTimer(self, singleShot=True, interval=250)
+        self.debounce.timeout.connect(self.rebuild)
+        self.anim = QTimer(self, interval=66)
+        self.anim.timeout.connect(self.tick)
+        self.rebuild()
+        self.anim.start()
 
     # ---------------- UI
     def build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
         lay = QHBoxLayout(root)
-        pv = QVBoxLayout()
         self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.preview.setFixedSize(432, 768)
-        pv.addWidget(self.preview)
-        sl = QSlider(Qt.Orientation.Horizontal); sl.setRange(0, 100)
-        sl.valueChanged.connect(lambda v: self.set_prog(v / 100))
-        pv.addWidget(QLabel("Preview position (camera pan)")); pv.addWidget(sl)
-        lay.addLayout(pv)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview.setMinimumSize(200, 355)
+        lay.addWidget(self.preview, 3)
         right = QVBoxLayout()
-        lay.addLayout(right, 1)
-        tabs = QTabWidget()
-        right.addWidget(tabs, 1)
+        lay.addLayout(right, 2)
 
-        t1 = QWidget(); f = QFormLayout(t1); tabs.addTab(t1, "Content")
-        self.btn_audio = QPushButton("Choose MP3 (or drag it into the window)")
+        self.btn_audio = QPushButton("1.  Choose MP3  (or drag it into the window)")
+        self.btn_audio.setMinimumHeight(38)
         self.btn_audio.clicked.connect(self.pick_audio)
-        f.addRow(self.btn_audio)
-        self.cb_scene = QComboBox()
-        for p in sorted(SCENES.glob("*.json")):
-            try:
-                self.cb_scene.addItem(json.loads(p.read_text(encoding="utf-8")).get("name", p.stem), p.stem)
-            except Exception:
-                pass
-        i = self.cb_scene.findData(self.S["scene"])
-        self.cb_scene.setCurrentIndex(max(0, i))
-        self.cb_scene.currentIndexChanged.connect(lambda _: self.set("scene", self.cb_scene.currentData()))
-        row = QHBoxLayout(); row.addWidget(self.cb_scene, 1)
-        b = QPushButton("Scenes folder"); b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(SCENES)))); row.addWidget(b)
-        f.addRow("Scene", row)
-        self.cb_cas = QComboBox()
-        self.cb_cas.addItem("Original (in the photo)", "")
-        for p in sorted((ASSETS / "cassettes").glob("*.json")):
-            try:
-                self.cb_cas.addItem(json.loads(p.read_text(encoding="utf-8")).get("name", p.stem), p.stem)
-            except Exception:
-                pass
-        self.cb_cas.setCurrentIndex(max(0, self.cb_cas.findData(self.S["cassette"])))
-        self.cb_cas.currentIndexChanged.connect(lambda _: self.set("cassette", self.cb_cas.currentData()))
-        row = QHBoxLayout(); row.addWidget(self.cb_cas, 1)
-        b = QPushButton("Cassettes folder"); b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(ASSETS / "cassettes")))); row.addWidget(b)
-        f.addRow("Cassette", row)
-        self.ck_label = QCheckBox("Write the song name on the cassette label"); self.ck_label.setChecked(self.S["label_on"])
-        self.ck_label.toggled.connect(lambda v: self.set("label_on", v))
-        f.addRow(self.ck_label)
-        self.ed_label = QLineEdit(self.S["label"]); self.ed_label.textChanged.connect(lambda v: self.set("label", v))
-        f.addRow("Label text", self.ed_label)
-        self.ck_top = QCheckBox("Replace the printed text on the player"); self.ck_top.setChecked(self.S["top_on"])
-        self.ck_top.toggled.connect(lambda v: self.set("top_on", v))
-        f.addRow(self.ck_top)
-        for key, label in (("line1", "Big text"), ("line2", "Model line"), ("line3", "Small line")):
-            e = QLineEdit(self.S[key]); e.textChanged.connect(lambda v, k=key: self.set(k, v)); f.addRow(label, e)
-        self.add_file_btn(f, "font_top", "Font for player text")
-        self.add_file_btn(f, "font_hand", "Handwriting font for label")
+        right.addWidget(self.btn_audio)
 
-        t2 = QWidget(); f2 = QFormLayout(t2); tabs.addTab(t2, "Look")
-        self.cb_led = QComboBox()
-        for k in core.LED_STYLES:
-            self.cb_led.addItem(LED_NAMES[k], k)
-        self.cb_led.setCurrentIndex(core.LED_STYLES.index(self.S["led_style"]))
-        self.cb_led.currentIndexChanged.connect(lambda _: self.set("led_style", self.cb_led.currentData()))
-        f2.addRow("LED bar style", self.cb_led)
-        for key, label in (("col_led", "LED color"), ("col_text", "Player text color"), ("col_ink", "Label ink color")):
-            f2.addRow(label, self.color_btn(key))
-        self.ck_spin = QCheckBox("Spin the reels"); self.ck_spin.setChecked(self.S["spin"])
-        self.ck_spin.toggled.connect(lambda v: self.set("spin", v, static=False))
-        f2.addRow(self.ck_spin)
-        sp = QDoubleSpinBox(minimum=20, maximum=600, suffix=" deg/s", value=self.S["spin_speed"])
-        sp.valueChanged.connect(lambda v: self.set("spin_speed", v, static=False))
-        f2.addRow("Reel speed", sp)
-        f2.addRow(QLabel("<b>Camera</b>"))
-        f2.addRow("Zoom", self.slider("zoom", 1, 4, False))
-        f2.addRow("Start X", self.slider("cx", 0, 1, False))
-        f2.addRow("Vertical", self.slider("cy", 0, 1, False))
-        self.ck_pan = QCheckBox("Pan during the video"); self.ck_pan.setChecked(self.S["pan"])
-        self.ck_pan.toggled.connect(lambda v: self.set("pan", v, static=False))
-        f2.addRow(self.ck_pan)
-        f2.addRow("End X", self.slider("cx_end", 0, 1, False))
+        right.addWidget(QLabel("2.  Scene"))
+        self.lst = QListWidget()
+        self.lst.setViewMode(QListView.ViewMode.IconMode)
+        self.lst.setResizeMode(QListView.ResizeMode.Adjust)
+        self.lst.setMovement(QListView.Movement.Static)
+        self.lst.setIconSize(QSize(78, 138))
+        self.lst.setSpacing(6)
+        self.lst.setWordWrap(True)
+        self.lst.setUniformItemSizes(True)
+        for key in self.order:
+            sc = json.loads((SCENES / f"{key}.json").read_text(encoding="utf-8"))
+            it = QListWidgetItem(QIcon(self.thumb(SCENES / sc["image"])), sc["name"])
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            it.setSizeHint(QSize(100, 178))
+            self.lst.addItem(it)
+            if key == self.S["scene"]:
+                self.lst.setCurrentItem(it)
+        if self.lst.currentRow() < 0:
+            self.lst.setCurrentRow(0)
+        self.lst.currentItemChanged.connect(self.on_scene)
+        right.addWidget(self.lst, 1)
+
         row = QHBoxLayout()
-        b1 = QPushButton("Vertical fill (zoom 2.7)"); b1.clicked.connect(lambda: self.preset(2.7))
-        b2 = QPushButton("Full scene (blurred bars)"); b2.clicked.connect(lambda: self.preset(1.0))
-        row.addWidget(b1); row.addWidget(b2); f2.addRow(row)
-
-        t3 = QWidget(); f3 = QFormLayout(t3); tabs.addTab(t3, "Output")
+        row.addWidget(QLabel("3.  Size"))
         self.cb_q = QComboBox()
         for q, (w, h) in QUALITY.items():
-            self.cb_q.addItem(f"{q}  ({w}x{h})", q)
+            self.cb_q.addItem(f"{q}p   ({w}x{h})", q)
         self.cb_q.setCurrentIndex(list(QUALITY).index(self.S["quality"]) if self.S["quality"] in QUALITY else 1)
-        self.cb_q.currentIndexChanged.connect(lambda _: self.set("quality", self.cb_q.currentData(), static=False, preview=False))
-        f3.addRow("Size", self.cb_q)
-        s1 = QDoubleSpinBox(maximum=3600, suffix=" s", value=self.S["start"])
-        s1.valueChanged.connect(lambda v: self.set("start", v, static=False, preview=False)); f3.addRow("Start at", s1)
-        s2 = QDoubleSpinBox(minimum=5, maximum=180, suffix=" s", value=self.S["dur"])
-        s2.valueChanged.connect(lambda v: self.set("dur", v, static=False, preview=False)); f3.addRow("Length", s2)
+        self.cb_q.currentIndexChanged.connect(lambda _: self.S.update(quality=self.cb_q.currentData()))
+        row.addWidget(self.cb_q, 1)
+        right.addLayout(row)
+
+        # گزینه‌های پیشرفته (پیش‌فرض بسته)
+        self.adv_btn = QToolButton(text="Advanced", checkable=True)
+        self.adv_btn.setArrowType(Qt.ArrowType.RightArrow)
+        self.adv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.adv_btn.toggled.connect(self.toggle_adv)
+        right.addWidget(self.adv_btn)
+        self.adv = QWidget(); f = QFormLayout(self.adv); f.setContentsMargins(0, 0, 0, 0)
+        self.ed_label = QLineEdit(self.S["label"]); self.ed_label.textChanged.connect(self.on_label)
+        f.addRow("Text on the tape", self.ed_label)
+        self.btn_font = QPushButton(os.path.basename(self.S["font_hand"]) or "Choose handwriting font (ttf / otf)...")
+        self.btn_font.clicked.connect(self.pick_font)
+        f.addRow("Font", self.btn_font)
+        s1 = QDoubleSpinBox(maximum=3600, suffix=" s", value=self.S["start"]); s1.valueChanged.connect(lambda v: self.S.update(start=v))
+        f.addRow("Start at", s1)
+        s2 = QDoubleSpinBox(minimum=5, maximum=180, suffix=" s", value=self.S["dur"]); s2.valueChanged.connect(lambda v: self.S.update(dur=v))
+        f.addRow("Length", s2)
+        sp = QDoubleSpinBox(minimum=20, maximum=600, suffix=" deg/s", value=self.S["spin_speed"]); sp.valueChanged.connect(lambda v: self.S.update(spin_speed=v))
+        f.addRow("Reel speed", sp)
+        self.adv.setVisible(False)
+        right.addWidget(self.adv)
 
         self.bar = QProgressBar(); right.addWidget(self.bar)
         self.status = QLabel(""); self.status.setWordWrap(True); right.addWidget(self.status)
         row = QHBoxLayout(); right.addLayout(row)
-        self.btn_go = QPushButton("Make video"); self.btn_go.setMinimumHeight(40)
+        self.btn_go = QPushButton("Make video"); self.btn_go.setMinimumHeight(44)
         self.btn_go.clicked.connect(self.start_render); row.addWidget(self.btn_go, 1)
         self.btn_stop = QPushButton("Cancel"); self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(lambda: self.worker and setattr(self.worker, "cancel", True)); row.addWidget(self.btn_stop)
 
-    def slider(self, key, lo, hi, static):
-        w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
-        s = QSlider(Qt.Orientation.Horizontal); s.setRange(0, 1000)
-        lab = QLabel(f"{self.S[key]:.2f}"); lab.setFixedWidth(40)
-        s.setValue(int((self.S[key] - lo) / (hi - lo) * 1000))
-        def ch(v):
-            val = lo + (hi - lo) * v / 1000
-            lab.setText(f"{val:.2f}"); self.set(key, val, static=static)
-        s.valueChanged.connect(ch)
-        self.sliders = getattr(self, "sliders", {}); self.sliders[key] = (s, lo, hi)
-        h.addWidget(s); h.addWidget(lab)
-        return w
+    def thumb(self, path):
+        im = Image.open(path).convert("RGB"); im.thumbnail((156, 276))
+        q = QImage(im.tobytes(), im.width, im.height, im.width * 3, QImage.Format.Format_RGB888).copy()
+        return QPixmap.fromImage(q)
 
-    def preset(self, z):
-        s, lo, hi = self.sliders["zoom"]
-        s.setValue(int((z - lo) / (hi - lo) * 1000))
-        self.ck_pan.setChecked(z > 1.5)
-
-    def color_btn(self, key):
-        b = QPushButton(self.S[key])
-        def paint():
-            b.setText(self.S[key]); b.setStyleSheet(f"background:{self.S[key]};color:#fff;padding:4px")
-        def pick():
-            c = QColorDialog.getColor(QColor(self.S[key]), self)
-            if c.isValid():
-                self.set(key, c.name()); paint()
-        b.clicked.connect(pick); paint()
-        return b
-
-    def add_file_btn(self, form, key, label):
-        b = QPushButton(os.path.basename(self.S[key]) or "Choose font file...")
-        def pick():
-            p, _ = QFileDialog.getOpenFileName(self, label, str(ASSETS / "fonts"), "Fonts (*.ttf *.otf)")
-            if p:
-                self.set(key, p); b.setText(os.path.basename(p))
-        b.clicked.connect(pick)
-        form.addRow(label, b)
+    def toggle_adv(self, on):
+        self.adv.setVisible(on)
+        self.adv_btn.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
 
     # ---------------- logic
-    def set(self, key, val, static=True, preview=True):
-        self.S[key] = val
-        if static:
+    def on_scene(self, cur, _prev):
+        if cur is not None:
+            self.S["scene"] = cur.data(Qt.ItemDataRole.UserRole)
             self.dirty = True
-        if preview:
-            self.timer.start()
+            self.debounce.start()
 
-    def set_prog(self, p):
-        self.prog = p
-        self.timer.start()
+    def on_label(self, v):
+        self.S["label"] = v
+        self.dirty = True
+        self.debounce.start()
+
+    def pick_font(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Font", str(ASSETS / "fonts"), "Fonts (*.ttf *.otf)")
+        if p:
+            self.S["font_hand"] = p
+            self.btn_font.setText(os.path.basename(p))
+            self.dirty = True
+            self.debounce.start()
 
     def pick_audio(self):
         p, _ = QFileDialog.getOpenFileName(self, "Song", "", "Audio (*.mp3 *.wav *.m4a *.flac *.ogg *.aac)")
@@ -305,19 +261,26 @@ class Main(QMainWindow):
 
     def compose(self):
         sc = json.loads((SCENES / f"{self.S['scene']}.json").read_text(encoding="utf-8"))
-        return core.compose_scene(sc, str(SCENES), self.S, text_fn,
-                                  load_font(self.S["font_top"]) or "Georgia",
-                                  load_font(self.S["font_hand"]) or "Ink Free", str(ASSETS / "cassettes"))
+        return core.compose_scene(sc, str(SCENES), self.S, text_fn, load_font(self.S["font_hand"]) or "Ink Free")
 
-    def refresh(self):
+    def rebuild(self):
         try:
-            if self.dirty or self.st is None:
-                self.st = self.compose(); self.dirty = False
-            W, H = 432, 768
-            img = core.render_frame(self.st, self.demo, self.S, 60, W, H, prog=self.prog)
-            q = QImage(img.tobytes(), W, H, W * 3, QImage.Format.Format_RGB888).copy()
-            self.preview.setPixmap(QPixmap.fromImage(q))
+            self.st = self.compose()
+            self.dirty = False
             self.status.setText("")
+        except Exception as e:
+            self.status.setText("Preview error: " + str(e))
+
+    def tick(self):
+        if self.st is None or self.worker is not None and self.worker.isRunning():
+            return
+        try:
+            s = self.preview.size()
+            H = max(320, min(s.height(), 960)); W = int(H * 9 / 16)
+            self.fi = (self.fi + 1) % self.demo.n
+            img = core.render_frame(self.st, self.demo, self.S, self.fi, W, H)
+            q = QImage(img.tobytes(), W, H, W * 3, QImage.Format.Format_RGB888).copy()
+            self.preview.setPixmap(QPixmap.fromImage(q).scaled(s, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         except Exception as e:
             self.status.setText("Preview error: " + str(e))
 
@@ -338,7 +301,7 @@ class Main(QMainWindow):
         self.worker.done.connect(self.on_done)
         self.worker.failed.connect(self.on_fail)
         self.btn_go.setEnabled(False); self.btn_stop.setEnabled(True)
-        self.status.setText("Rendering... (1080 takes several minutes)")
+        self.status.setText("Rendering...")
         self.worker.start()
 
     def on_done(self, out):
@@ -351,7 +314,7 @@ class Main(QMainWindow):
 
     def closeEvent(self, e):
         try:
-            SETTINGS.write_text(json.dumps(self.S, ensure_ascii=False, indent=1), encoding="utf-8")
+            SETTINGS.write_text(json.dumps({k: self.S[k] for k in ("scene", "quality", "font_hand")}, indent=1), encoding="utf-8")
         except Exception:
             pass
         e.accept()

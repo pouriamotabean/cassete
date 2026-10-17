@@ -1,0 +1,66 @@
+{
+ "name": "Synthwave Sunset",
+ "image": "synthwave_sunset.jpg",
+ "reels": {
+  "centers": [
+   [
+    285.5,
+    973.5
+   ],
+   [
+    386.5,
+    971.5
+   ]
+  ],
+  "radius": 20
+ },
+ "label": {
+  "box": [
+   262,
+   929,
+   422,
+   942
+  ],
+  "paper_x": [
+   [
+    268,
+    416
+   ]
+  ],
+  "ink": "#3b1d4a",
+  "angle": 1.13
+ },
+ "viz": {
+  "type": "panel",
+  "quad": [
+   [
+    484,
+    903
+   ],
+   [
+    709,
+    899
+   ],
+   [
+    709,
+    978
+   ],
+   [
+    484,
+    983
+   ]
+  ],
+  "style": "segments",
+  "colors": [
+   "#ff3d9a",
+   "#c58bff"
+  ],
+  "count": 36,
+  "clean": [
+   492,
+   945,
+   704,
+   975
+  ]
+ }
+}

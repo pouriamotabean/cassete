@@ -2,12 +2,11 @@ Cassette Reels
 
 Run CassetteReels.exe (keep the assets folder next to it).
 
-1. Drag an MP3 into the window. The song name goes on the cassette label automatically.
-2. Content tab: edit the label text, optionally replace the printed text on the player, and load your fonts (ttf / otf).
-3. Look tab: LED style and colors, reel speed, and the camera. For vertical video the camera pans from the player to the LED bar.
-4. Output tab: size (480 / 720 / 1080 vertical), start time, length (default 60 s). Then "Make video".
+1. Drag an MP3 into the window.
+2. Pick a scene.
+3. Pick the size (480 / 720 / 1080, vertical) and press "Make video".
 
-Cassettes (assets/cassettes): png + json per model (Sony HF90, Panasonic HF90, TDK). Pick one in the Content tab; its reels spin and the song name goes on its label.
+The song name is written on the tape label, the reels spin and the scene's own visualizer follows the music.
+Default length is 60 seconds. "Advanced" lets you change the text on the tape, the handwriting font (ttf / otf), the start time, the length and the reel speed.
 
-Scenes live in assets/scenes: an image (png) plus a json file with the reel centers, the LED bar line and the text areas.
-Send new ChatGPT scenes and the json can be made for them.
+Scenes live in assets/scenes: a jpg plus a json with the reel centers, the label box and the visualizer area.

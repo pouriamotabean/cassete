@@ -1,0 +1,67 @@
+{
+ "name": "Brooklyn Loft",
+ "image": "brooklyn_loft.jpg",
+ "reels": {
+  "centers": [
+   [
+    221.5,
+    802.5
+   ],
+   [
+    352.5,
+    800.5
+   ]
+  ],
+  "radius": 23
+ },
+ "label": {
+  "box": [
+   162,
+   746,
+   408,
+   772
+  ],
+  "paper_x": [
+   [
+    170,
+    400
+   ]
+  ],
+  "ink": "#0f0b08",
+  "opacity": 0.95,
+  "angle": 0
+ },
+ "viz": {
+  "type": "panel",
+  "quad": [
+   [
+    487,
+    720
+   ],
+   [
+    876,
+    720
+   ],
+   [
+    876,
+    850
+   ],
+   [
+    487,
+    850
+   ]
+  ],
+  "style": "mirror",
+  "colors": [
+   "#ffb347",
+   "#ffe3a8"
+  ],
+  "count": 44,
+  "clean": [
+   515,
+   724,
+   872,
+   846
+  ]
+ }
+}

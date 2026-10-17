@@ -1,0 +1,50 @@
+{
+ "name": "Beige Frame",
+ "image": "beige_frame.jpg",
+ "reels": {
+  "centers": [
+   [
+    412.5,
+    885.5
+   ],
+   [
+    556.5,
+    885.5
+   ]
+  ],
+  "radius": 31
+ },
+ "label": {
+  "box": [
+   380,
+   822,
+   617,
+   849
+  ],
+  "paper_x": [
+   [
+    395,
+    540
+   ]
+  ],
+  "ink": "#2a241e",
+  "angle": 0
+ },
+ "viz": {
+  "type": "cylinder",
+  "center": [
+   470,
+   1430
+  ],
+  "length": 560,
+  "radius": 30,
+  "light": [
+   1.0,
+   0.94,
+   0.84
+  ],
+  "amb": 1.0,
+  "color": "#ffb04a",
+  "count": 40
+ }
+}

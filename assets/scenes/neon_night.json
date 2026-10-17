@@ -1,0 +1,60 @@
+{
+ "name": "Neon Night",
+ "image": "neon_night.jpg",
+ "reels": {
+  "centers": [
+   [
+    254.5,
+    907.5
+   ],
+   [
+    357.5,
+    907.5
+   ]
+  ],
+  "radius": 19
+ },
+ "label": {
+  "box": [
+   226,
+   866,
+   396,
+   881
+  ],
+  "paper_x": [
+   [
+    232,
+    390
+   ]
+  ],
+  "ink": "#2a2a30",
+  "angle": 0
+ },
+ "viz": {
+  "type": "panel",
+  "quad": [
+   [
+    457,
+    829
+   ],
+   [
+    721,
+    829
+   ],
+   [
+    721,
+    915
+   ],
+   [
+    457,
+    915
+   ]
+  ],
+  "style": "segments",
+  "colors": [
+   "#8a4dff",
+   "#3be6ff"
+  ],
+  "count": 40
+ }
+}

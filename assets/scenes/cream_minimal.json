@@ -1,0 +1,59 @@
+{
+ "name": "Cream Minimal",
+ "image": "cream_minimal.jpg",
+ "reels": {
+  "centers": [
+   [
+    247.5,
+    911.5
+   ],
+   [
+    354.5,
+    909.5
+   ]
+  ],
+  "radius": 20
+ },
+ "label": {
+  "box": [
+   232,
+   867,
+   392,
+   886
+  ],
+  "paper_x": [
+   [
+    238,
+    386
+   ]
+  ],
+  "ink": "#33302c",
+  "angle": 1.07
+ },
+ "viz": {
+  "type": "panel",
+  "quad": [
+   [
+    452,
+    838
+   ],
+   [
+    679,
+    833
+   ],
+   [
+    679,
+    905
+   ],
+   [
+    452,
+    912
+   ]
+  ],
+  "style": "line",
+  "colors": [
+   "#ffe2b8",
+   "#fff4dc"
+  ]
+ }
+}

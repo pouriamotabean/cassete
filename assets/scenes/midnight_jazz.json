@@ -1,0 +1,67 @@
+{
+ "name": "Midnight Jazz",
+ "image": "midnight_jazz.jpg",
+ "reels": {
+  "centers": [
+   [
+    221.5,
+    801.5
+   ],
+   [
+    358.5,
+    801.5
+   ]
+  ],
+  "radius": 23
+ },
+ "label": {
+  "box": [
+   162,
+   744,
+   406,
+   770
+  ],
+  "paper_x": [
+   [
+    170,
+    400
+   ]
+  ],
+  "ink": "#0f0b08",
+  "opacity": 0.95,
+  "angle": 0
+ },
+ "viz": {
+  "type": "panel",
+  "quad": [
+   [
+    487,
+    727
+   ],
+   [
+    876,
+    727
+   ],
+   [
+    876,
+    853
+   ],
+   [
+    487,
+    853
+   ]
+  ],
+  "style": "segments",
+  "colors": [
+   "#ff8a2a",
+   "#ffd27a"
+  ],
+  "count": 44,
+  "clean": [
+   500,
+   732,
+   872,
+   849
+  ]
+ }
+}
