@@ -1,4 +1,4 @@
-Cassette Reels v2.4
+Cassette Reels v2.5
 
 Run CassetteReels.exe (keep the assets folder next to it).
 
@@ -14,3 +14,4 @@ Scenes live in assets/scenes: a jpg plus a json with the reel centers, the label
 v2.2: new graphite / walnut / amber interface (assets/ui), resizable window, scene strip with arrows, 'By Pouria Motabean' credit in the footer.
 v2.3: Persian song names use the built-in Dast Nevis font (assets/fonts/danstevis.otf); English names use the English font (Advanced). Both can be changed in Advanced.
 v2.4: song names on the tape are now fitted by their real ink bounds, so Persian ascenders/descenders and dots stay inside the label strip.
+v2.5: the main steps (MP3, scene, output size) now always fit without scrolling (the scene cards shrink to make room); Advanced scrolls into view; Persian file names display correctly in the drop zone.

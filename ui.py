@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QRectF, QPointF, QRect, Signal
 from PySide6.QtGui import (QPainter, QPixmap, QColor, QPen, QBrush, QLinearGradient, QRadialGradient,
                            QPainterPath, QFont)
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QSizePolicy
 
 AMBER = QColor("#e8a54b")
 AMBER_DIM = QColor("#8d6f43")
@@ -175,7 +175,7 @@ class DropZone(QWidget):
         super().__init__()
         self.ui, self.exts = ui_dir, exts
         self.setAcceptDrops(True)
-        self.setMinimumHeight(98)
+        self.setMinimumHeight(84)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hover = self.drag = False
         self.name = ""
@@ -210,17 +210,21 @@ class DropZone(QWidget):
         hot = self.hover or self.drag
         nine(p, pm(self.ui, "drop_h.png" if hot else "drop_n.png"), self.rect(), (28, 28, 28, 28))
         cx, cy = self.width() / 2, self.height() / 2
-        cassette_icon(p, QRectF(cx - 24, cy - 32, 48, 31), AMBER if (hot or self.name) else AMBER_DIM, 1.5)
+        cassette_icon(p, QRectF(cx - 22, cy - 35, 44, 28), AMBER if (hot or self.name) else AMBER_DIM, 1.5)
         f = QFont(self.font()); f.setPixelSize(13)
         p.setFont(f)
         if self.name:
             f.setWeight(QFont.Weight.DemiBold); p.setFont(f)
             p.setPen(QColor("#f0c27a"))
-            txt = p.fontMetrics().elidedText(self.name, Qt.TextElideMode.ElideMiddle, int(self.width() - 80))
-            p.drawText(QRectF(0, cy + 2, self.width(), 22), Qt.AlignmentFlag.AlignCenter, txt)
+            stem = Path(self.name).stem
+            if any("\u0600" <= ch <= "\u06ff" for ch in stem):
+                p.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            txt = p.fontMetrics().elidedText(stem, Qt.TextElideMode.ElideMiddle, int(self.width() - 80))
+            p.drawText(QRectF(0, cy - 4, self.width(), 22), Qt.AlignmentFlag.AlignCenter, txt)
+            p.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             f.setPixelSize(11); f.setWeight(QFont.Weight.Normal); p.setFont(f)
             p.setPen(TEXT_DIM)
-            p.drawText(QRectF(0, cy + 22, self.width(), 18), Qt.AlignmentFlag.AlignCenter, "click or drop to change")
+            p.drawText(QRectF(0, cy + 15, self.width(), 18), Qt.AlignmentFlag.AlignCenter, "click or drop to change")
         else:
             p.setPen(TEXT_DIM)
             p.drawText(QRectF(0, cy + 4, self.width(), 24), Qt.AlignmentFlag.AlignCenter, "Drop your MP3 here  (or click to browse)")
@@ -228,7 +232,7 @@ class DropZone(QWidget):
 
 class SceneStrip(QWidget):
     changed = Signal(str)
-    CW, CH, GAP, ARW = 80, 142, 12, 38
+    GAP, ARW = 12, 38
 
     def __init__(self, ui_dir):
         super().__init__()
@@ -238,7 +242,8 @@ class SceneStrip(QWidget):
         self.off = 0
         self.hover = -1
         self.setMouseTracking(True)
-        self.setFixedHeight(self.CH + 18)
+        self.setMinimumHeight(112)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_items(self, items, current):
         self.items = items
@@ -248,6 +253,18 @@ class SceneStrip(QWidget):
 
     def current(self):
         return self.items[self.sel] if self.items else None
+
+    @property
+    def CH(self):
+        return max(84, min(150, self.height() - 18))
+
+    @property
+    def CW(self):
+        return round(self.CH * 9 / 16)
+
+    def sizeHint(self):
+        from PySide6.QtCore import QSize
+        return QSize(400, 168)
 
     def n_vis(self):
         return max(1, int((self.width() - 2 * self.ARW) // (self.CW + self.GAP)))
@@ -265,7 +282,7 @@ class SceneStrip(QWidget):
         n = self.n_vis()
         total = n * (self.CW + self.GAP) - self.GAP
         x0 = (self.width() - total) / 2
-        return QRectF(x0 + (i - self.off) * (self.CW + self.GAP), 9, self.CW, self.CH)
+        return QRectF(x0 + (i - self.off) * (self.CW + self.GAP), (self.height() - self.CH) / 2, self.CW, self.CH)
 
     def arrow_rect(self, side):
         return QRectF(2 if side < 0 else self.width() - self.ARW + 4, self.height() / 2 - 15, 30, 30)

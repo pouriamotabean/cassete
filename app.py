@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QHBoxLayout, 
 import core
 import ui
 
-VERSION = "2.4"
+VERSION = "2.5"
 FROZEN = getattr(sys, "frozen", False)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 ASSETS = APP_DIR / "assets"
@@ -111,7 +111,7 @@ class Main(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Cassette Reels v" + VERSION)
-        self.setMinimumSize(900, 640)
+        self.setMinimumSize(900, 660)
         self.resize(1120, 780)
         self.S = dict(core.DEFAULTS)
         try:
@@ -160,11 +160,11 @@ class Main(QMainWindow):
         lay.addLayout(right, 6)
 
         content = QWidget(); cl = QVBoxLayout(content)
-        cl.setContentsMargins(0, 0, 10, 0); cl.setSpacing(12)
+        cl.setContentsMargins(0, 0, 10, 0); cl.setSpacing(9)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.viewport().setAutoFillBackground(False); content.setAutoFillBackground(False)
-        scroll.setWidget(content)
+        scroll.setWidget(content); self.scroll = scroll
         right.addWidget(scroll, 1)
 
         h1, _ = self.heading(1, "Add your MP3")
@@ -186,7 +186,7 @@ class Main(QMainWindow):
             self.S["scene"] = self.order[0]
         self.strip.set_items(items, self.S["scene"])
         self.strip.changed.connect(self.on_scene)
-        cl.addWidget(self.strip)
+        cl.addWidget(self.strip, 1)
         self.scene_name.setText(self.strip.current()[1])
         cl.addWidget(self.divider())
 
@@ -197,6 +197,7 @@ class Main(QMainWindow):
             self.cb_q.addItem(f"{q}p   ({w} x {h})", q)
         self.cb_q.setCurrentIndex(list(QUALITY).index(self.S["quality"]) if self.S["quality"] in QUALITY else 1)
         self.cb_q.currentIndexChanged.connect(lambda _: self.S.update(quality=self.cb_q.currentData()))
+        self.cb_q.setFixedHeight(48)
         cl.addWidget(self.cb_q)
 
         self.adv_t = ui.AdvToggle()
@@ -219,9 +220,8 @@ class Main(QMainWindow):
         sp = QDoubleSpinBox(minimum=20, maximum=600, suffix=" deg/s", value=self.S["spin_speed"]); sp.valueChanged.connect(lambda v: self.S.update(spin_speed=v))
         f.addRow(lab("Reel speed"), sp)
         self.adv.setVisible(False)
-        self.adv_t.toggled.connect(self.adv.setVisible)
+        self.adv_t.toggled.connect(self.on_adv)
         cl.addWidget(self.adv)
-        cl.addStretch(1)
 
         # bottom bar: always visible
         self.status = QLabel(""); self.status.setObjectName("status"); self.status.setWordWrap(True)
@@ -234,6 +234,11 @@ class Main(QMainWindow):
         self.btn_go = QPushButton("Make video"); self.btn_go.setObjectName("primary"); self.btn_go.setFixedSize(259, 75)
         self.btn_go.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_go.clicked.connect(self.start_render); row.addWidget(self.btn_go)
+
+    def on_adv(self, on):
+        self.adv.setVisible(on)
+        if on:
+            QTimer.singleShot(60, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
     def thumb(self, path):
         im = Image.open(path).convert("RGB"); im.thumbnail((200, 356))
