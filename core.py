@@ -10,7 +10,7 @@ NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LANCZOS = Image.Resampling.LANCZOS
 
 DEFAULTS = dict(scene="golden_frame", quality=720, start=0.0, dur=60.0,
-                label="Song name", font_hand="", spin=True, spin_speed=120.0)
+                label="Song name", font_hand="", font_fa="", spin=True, spin_speed=120.0)
 
 
 def rgb(h):
@@ -389,7 +389,21 @@ def compose_scene(scene, scene_dir, S, text_fn, fam_hand):
     if lb and S["label"].strip():
         img = fill_label(img, lb["box"], lb["paper_x"])
         x0, y0, x1, y1 = lb["box"]
-        t = fit_text(text_fn, S["label"], fam_hand, (y1 - y0) * lb.get("k", 1.0), lb.get("ink", "#2a241e"), (x1 - x0) * .96)
+        fa = any("\u0600" <= ch <= "\u06ff" for ch in S["label"])
+        # fit by the real ink bounds (ascenders / descenders / dots), so nothing leaves the label strip
+        bw, bh = (x1 - x0) * .92, (y1 - y0) * .78
+        px = (y1 - y0) * lb.get("k", 1.0) * (1.9 if fa else 1.3)
+        for _ in range(40):
+            t = text_fn(S["label"], fam_hand, max(5, int(px)), lb.get("ink", "#2a241e"))
+            bb = t.getchannel("A").point(lambda v: 255 if v > 24 else 0).getbbox()
+            if not bb:
+                break
+            iw, ih = bb[2] - bb[0], bb[3] - bb[1]
+            if (iw <= bw and ih <= bh) or px < 6:
+                break
+            px *= min(bw / iw, bh / ih, .97)
+        if bb:
+            t = t.crop((max(0, bb[0] - 3), max(0, bb[1] - 3), bb[2] + 3, bb[3] + 3))
         t = t.filter(ImageFilter.GaussianBlur(lb.get("soft", .45)))
         a = t.getchannel("A").point(lambda v: int(v * lb.get("opacity", .88)))
         t.putalpha(a)

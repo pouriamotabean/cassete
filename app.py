@@ -1,18 +1,20 @@
 import sys, os, json, shutil, subprocess
 from pathlib import Path
 from PIL import Image
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QRect, QSize
-from PySide6.QtGui import QImage, QPixmap, QFont, QFontMetrics, QPainter, QColor, QFontDatabase, QIcon
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QRect
+from PySide6.QtGui import QImage, QPixmap, QFont, QFontMetrics, QPainter, QColor, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QFormLayout,
-                               QLabel, QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, QCheckBox,
-                               QProgressBar, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
-                               QToolButton, QSizePolicy, QListView)
+                               QLabel, QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, QFileDialog,
+                               QMessageBox, QScrollArea, QFrame)
 import core
+import ui
 
+VERSION = "2.4"
 FROZEN = getattr(sys, "frozen", False)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 ASSETS = APP_DIR / "assets"
 SCENES = ASSETS / "scenes"
+UI_DIR = ASSETS / "ui"
 SETTINGS = APP_DIR / "settings.json"
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
 QUALITY = {480: (480, 854), 720: (720, 1280), 1080: (1080, 1920)}
@@ -108,10 +110,9 @@ class Worker(QThread):
 class Main(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cassette Reels")
-        self.setAcceptDrops(True)
-        self.setMinimumSize(760, 520)
-        self.resize(1040, 700)
+        self.setWindowTitle("Cassette Reels v" + VERSION)
+        self.setMinimumSize(900, 640)
+        self.resize(1120, 780)
         self.S = dict(core.DEFAULTS)
         try:
             self.S.update(json.loads(SETTINGS.read_text(encoding="utf-8")))
@@ -120,8 +121,6 @@ class Main(QMainWindow):
         self.audio = ""
         self.worker = None
         self.st = None
-        self.dirty = True
-        self.frame_img = None
         self.fi = 0
         self.demo = core.demo_analysis()
         self.order = json.loads((SCENES / "order.json").read_text(encoding="utf-8"))
@@ -134,110 +133,128 @@ class Main(QMainWindow):
         self.anim.start()
 
     # ---------------- UI
+    def heading(self, num, text, right=False):
+        w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(12)
+        b = QLabel(str(num)); b.setObjectName("badge"); b.setFixedSize(30, 30); b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t = QLabel(text); t.setObjectName("heading")
+        h.addWidget(b); h.addWidget(t); h.addStretch(1)
+        r = None
+        if right:
+            r = QLabel(""); r.setObjectName("headingRight"); h.addWidget(r)
+        return w, r
+
+    def divider(self):
+        f = QFrame(); f.setObjectName("div"); f.setFixedHeight(1); return f
+
     def build_ui(self):
-        root = QWidget()
+        self.setStyleSheet(ui.build_qss(UI_DIR))
+        root = ui.Faceplate(UI_DIR, VERSION)
         self.setCentralWidget(root)
         lay = QHBoxLayout(root)
-        self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.preview.setMinimumSize(200, 355)
-        lay.addWidget(self.preview, 3)
-        right = QVBoxLayout()
-        lay.addLayout(right, 2)
+        lay.setContentsMargins(ui.WOOD + 26, ui.TOP + 8, ui.WOOD + 26, ui.BOT + 6)
+        lay.setSpacing(30)
+        self.bezel = ui.Bezel(UI_DIR)
+        lay.addWidget(self.bezel, 5)
 
-        self.btn_audio = QPushButton("1.  Choose MP3  (or drag it into the window)")
-        self.btn_audio.setMinimumHeight(38)
-        self.btn_audio.clicked.connect(self.pick_audio)
-        right.addWidget(self.btn_audio)
+        right = QVBoxLayout(); right.setSpacing(10)
+        lay.addLayout(right, 6)
 
-        right.addWidget(QLabel("2.  Scene"))
-        self.lst = QListWidget()
-        self.lst.setViewMode(QListView.ViewMode.IconMode)
-        self.lst.setResizeMode(QListView.ResizeMode.Adjust)
-        self.lst.setMovement(QListView.Movement.Static)
-        self.lst.setIconSize(QSize(78, 138))
-        self.lst.setSpacing(6)
-        self.lst.setWordWrap(True)
-        self.lst.setUniformItemSizes(True)
+        content = QWidget(); cl = QVBoxLayout(content)
+        cl.setContentsMargins(0, 0, 10, 0); cl.setSpacing(12)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False); content.setAutoFillBackground(False)
+        scroll.setWidget(content)
+        right.addWidget(scroll, 1)
+
+        h1, _ = self.heading(1, "Add your MP3")
+        cl.addWidget(h1)
+        self.drop = ui.DropZone(UI_DIR, AUDIO_EXT)
+        self.drop.browse.connect(self.pick_audio)
+        self.drop.dropped.connect(self.set_audio)
+        cl.addWidget(self.drop)
+        cl.addWidget(self.divider())
+
+        h2, self.scene_name = self.heading(2, "Choose your scene", right=True)
+        cl.addWidget(h2)
+        self.strip = ui.SceneStrip(UI_DIR)
+        items = []
         for key in self.order:
             sc = json.loads((SCENES / f"{key}.json").read_text(encoding="utf-8"))
-            it = QListWidgetItem(QIcon(self.thumb(SCENES / sc["image"])), sc["name"])
-            it.setData(Qt.ItemDataRole.UserRole, key)
-            it.setSizeHint(QSize(100, 178))
-            self.lst.addItem(it)
-            if key == self.S["scene"]:
-                self.lst.setCurrentItem(it)
-        if self.lst.currentRow() < 0:
-            self.lst.setCurrentRow(0)
-        self.lst.currentItemChanged.connect(self.on_scene)
-        right.addWidget(self.lst, 1)
+            items.append((key, sc["name"], self.thumb(SCENES / sc["image"])))
+        if self.S["scene"] not in self.order:
+            self.S["scene"] = self.order[0]
+        self.strip.set_items(items, self.S["scene"])
+        self.strip.changed.connect(self.on_scene)
+        cl.addWidget(self.strip)
+        self.scene_name.setText(self.strip.current()[1])
+        cl.addWidget(self.divider())
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("3.  Size"))
+        h3, _ = self.heading(3, "Select output size")
+        cl.addWidget(h3)
         self.cb_q = QComboBox()
         for q, (w, h) in QUALITY.items():
-            self.cb_q.addItem(f"{q}p   ({w}x{h})", q)
+            self.cb_q.addItem(f"{q}p   ({w} x {h})", q)
         self.cb_q.setCurrentIndex(list(QUALITY).index(self.S["quality"]) if self.S["quality"] in QUALITY else 1)
         self.cb_q.currentIndexChanged.connect(lambda _: self.S.update(quality=self.cb_q.currentData()))
-        row.addWidget(self.cb_q, 1)
-        right.addLayout(row)
+        cl.addWidget(self.cb_q)
 
-        # گزینه‌های پیشرفته (پیش‌فرض بسته)
-        self.adv_btn = QToolButton(text="Advanced", checkable=True)
-        self.adv_btn.setArrowType(Qt.ArrowType.RightArrow)
-        self.adv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.adv_btn.toggled.connect(self.toggle_adv)
-        right.addWidget(self.adv_btn)
-        self.adv = QWidget(); f = QFormLayout(self.adv); f.setContentsMargins(0, 0, 0, 0)
+        self.adv_t = ui.AdvToggle()
+        cl.addWidget(self.adv_t)
+        self.adv = QWidget(); f = QFormLayout(self.adv); f.setContentsMargins(4, 0, 0, 0); f.setVerticalSpacing(10)
+        def lab(t):
+            l = QLabel(t); l.setObjectName("formLabel"); return l
         self.ed_label = QLineEdit(self.S["label"]); self.ed_label.textChanged.connect(self.on_label)
-        f.addRow("Text on the tape", self.ed_label)
-        self.btn_font = QPushButton(os.path.basename(self.S["font_hand"]) or "Choose handwriting font (ttf / otf)...")
-        self.btn_font.clicked.connect(self.pick_font)
-        f.addRow("Font", self.btn_font)
+        f.addRow(lab("Text on the tape"), self.ed_label)
+        self.btn_font = QPushButton(os.path.basename(self.S["font_hand"]) or "English handwriting font (ttf / otf)...")
+        self.btn_font.setObjectName("sec"); self.btn_font.setFixedHeight(40); self.btn_font.clicked.connect(lambda: self.pick_font("font_hand", self.btn_font))
+        f.addRow(lab("English font"), self.btn_font)
+        self.btn_font_fa = QPushButton(os.path.basename(self.S["font_fa"]) or "Dast Nevis (built in)")
+        self.btn_font_fa.setObjectName("sec"); self.btn_font_fa.setFixedHeight(40); self.btn_font_fa.clicked.connect(lambda: self.pick_font("font_fa", self.btn_font_fa))
+        f.addRow(lab("Persian font"), self.btn_font_fa)
         s1 = QDoubleSpinBox(maximum=3600, suffix=" s", value=self.S["start"]); s1.valueChanged.connect(lambda v: self.S.update(start=v))
-        f.addRow("Start at", s1)
+        f.addRow(lab("Start at"), s1)
         s2 = QDoubleSpinBox(minimum=5, maximum=180, suffix=" s", value=self.S["dur"]); s2.valueChanged.connect(lambda v: self.S.update(dur=v))
-        f.addRow("Length", s2)
+        f.addRow(lab("Length"), s2)
         sp = QDoubleSpinBox(minimum=20, maximum=600, suffix=" deg/s", value=self.S["spin_speed"]); sp.valueChanged.connect(lambda v: self.S.update(spin_speed=v))
-        f.addRow("Reel speed", sp)
+        f.addRow(lab("Reel speed"), sp)
         self.adv.setVisible(False)
-        right.addWidget(self.adv)
+        self.adv_t.toggled.connect(self.adv.setVisible)
+        cl.addWidget(self.adv)
+        cl.addStretch(1)
 
-        self.bar = QProgressBar(); right.addWidget(self.bar)
-        self.status = QLabel(""); self.status.setWordWrap(True); right.addWidget(self.status)
-        row = QHBoxLayout(); right.addLayout(row)
-        self.btn_go = QPushButton("Make video"); self.btn_go.setMinimumHeight(44)
-        self.btn_go.clicked.connect(self.start_render); row.addWidget(self.btn_go, 1)
-        self.btn_stop = QPushButton("Cancel"); self.btn_stop.setEnabled(False)
-        self.btn_stop.clicked.connect(lambda: self.worker and setattr(self.worker, "cancel", True)); row.addWidget(self.btn_stop)
+        # bottom bar: always visible
+        self.status = QLabel(""); self.status.setObjectName("status"); self.status.setWordWrap(True)
+        right.addWidget(self.status)
+        row = QHBoxLayout(); row.setSpacing(14); right.addLayout(row)
+        self.bar = ui.Progress(); row.addWidget(self.bar, 1)
+        self.btn_stop = QPushButton("Cancel"); self.btn_stop.setObjectName("sec"); self.btn_stop.setFixedSize(120, 45); self.btn_stop.setVisible(False)
+        self.btn_stop.clicked.connect(lambda: self.worker and setattr(self.worker, "cancel", True))
+        row.addWidget(self.btn_stop)
+        self.btn_go = QPushButton("Make video"); self.btn_go.setObjectName("primary"); self.btn_go.setFixedSize(259, 75)
+        self.btn_go.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_go.clicked.connect(self.start_render); row.addWidget(self.btn_go)
 
     def thumb(self, path):
-        im = Image.open(path).convert("RGB"); im.thumbnail((156, 276))
+        im = Image.open(path).convert("RGB"); im.thumbnail((200, 356))
         q = QImage(im.tobytes(), im.width, im.height, im.width * 3, QImage.Format.Format_RGB888).copy()
         return QPixmap.fromImage(q)
 
-    def toggle_adv(self, on):
-        self.adv.setVisible(on)
-        self.adv_btn.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
-
     # ---------------- logic
-    def on_scene(self, cur, _prev):
-        if cur is not None:
-            self.S["scene"] = cur.data(Qt.ItemDataRole.UserRole)
-            self.dirty = True
-            self.debounce.start()
+    def on_scene(self, key):
+        self.S["scene"] = key
+        self.scene_name.setText(self.strip.current()[1])
+        self.debounce.start()
 
     def on_label(self, v):
         self.S["label"] = v
-        self.dirty = True
         self.debounce.start()
 
-    def pick_font(self):
+    def pick_font(self, key, btn):
         p, _ = QFileDialog.getOpenFileName(self, "Font", str(ASSETS / "fonts"), "Fonts (*.ttf *.otf)")
         if p:
-            self.S["font_hand"] = p
-            self.btn_font.setText(os.path.basename(p))
-            self.dirty = True
+            self.S[key] = p
+            btn.setText(os.path.basename(p))
             self.debounce.start()
 
     def pick_audio(self):
@@ -247,40 +264,33 @@ class Main(QMainWindow):
 
     def set_audio(self, p):
         self.audio = p
-        self.btn_audio.setText("Song: " + os.path.basename(p))
+        self.drop.set_name(os.path.basename(p))
         self.ed_label.setText(Path(p).stem.replace("_", " "))
-
-    def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
-            e.acceptProposedAction()
-
-    def dropEvent(self, e):
-        for u in e.mimeData().urls():
-            if Path(u.toLocalFile()).suffix.lower() in AUDIO_EXT:
-                self.set_audio(u.toLocalFile()); break
 
     def compose(self):
         sc = json.loads((SCENES / f"{self.S['scene']}.json").read_text(encoding="utf-8"))
-        return core.compose_scene(sc, str(SCENES), self.S, text_fn, load_font(self.S["font_hand"]) or "Ink Free")
+        fa = load_font(self.S["font_fa"]) or load_font(str(ASSETS / "fonts" / "danstevis.otf"))
+        la = load_font(self.S["font_hand"]) or "Ink Free"
+        persian = any("\u0600" <= ch <= "\u06ff" for ch in self.S["label"])
+        return core.compose_scene(sc, str(SCENES), self.S, text_fn, fa if (persian and fa) else la)
 
     def rebuild(self):
         try:
             self.st = self.compose()
-            self.dirty = False
             self.status.setText("")
         except Exception as e:
             self.status.setText("Preview error: " + str(e))
 
     def tick(self):
-        if self.st is None or self.worker is not None and self.worker.isRunning():
+        if self.st is None or (self.worker is not None and self.worker.isRunning()):
             return
         try:
-            s = self.preview.size()
-            H = max(320, min(s.height(), 960)); W = int(H * 9 / 16)
+            s = self.bezel.screen_rect()
+            H = int(max(320, min(s.height(), 1000))); W = int(H * 9 / 16)
             self.fi = (self.fi + 1) % self.demo.n
             img = core.render_frame(self.st, self.demo, self.S, self.fi, W, H)
             q = QImage(img.tobytes(), W, H, W * 3, QImage.Format.Format_RGB888).copy()
-            self.preview.setPixmap(QPixmap.fromImage(q).scaled(s, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.bezel.set_pixmap(QPixmap.fromImage(q))
         except Exception as e:
             self.status.setText("Preview error: " + str(e))
 
@@ -297,24 +307,25 @@ class Main(QMainWindow):
         except Exception as e:
             self.status.setText("Error: " + str(e)); return
         self.worker = Worker(dict(self.S), st, W, H, self.audio, out)
-        self.worker.progress.connect(self.bar.setValue)
+        self.worker.progress.connect(self.bar.set_value)
         self.worker.done.connect(self.on_done)
         self.worker.failed.connect(self.on_fail)
-        self.btn_go.setEnabled(False); self.btn_stop.setEnabled(True)
+        self.btn_go.setEnabled(False); self.btn_stop.setVisible(True)
+        self.bar.set_value(0)
         self.status.setText("Rendering...")
         self.worker.start()
 
     def on_done(self, out):
-        self.btn_go.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.btn_go.setEnabled(True); self.btn_stop.setVisible(False)
         self.status.setText("Done: " + out)
 
     def on_fail(self, msg):
-        self.btn_go.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.btn_go.setEnabled(True); self.btn_stop.setVisible(False)
         self.status.setText("Failed: " + msg)
 
     def closeEvent(self, e):
         try:
-            SETTINGS.write_text(json.dumps({k: self.S[k] for k in ("scene", "quality", "font_hand")}, indent=1), encoding="utf-8")
+            SETTINGS.write_text(json.dumps({k: self.S[k] for k in ("scene", "quality", "font_hand", "font_fa")}, indent=1), encoding="utf-8")
         except Exception:
             pass
         e.accept()
